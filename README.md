@@ -2,74 +2,110 @@
 
 **Ironhack AI Consulting Course**
 
-A working demonstration of connecting a LangChain ReAct agent to an MCP (Model Context Protocol)
-filesystem server. The agent dynamically discovers tools, reads documents, and performs
-multi-document analysis — all through the standardized MCP interface.
+A working demonstration of a LangChain ReAct agent connected to an MCP filesystem server.
+The agent discovers tools at runtime, reads documents, and performs multi-document analysis
+— all through the standardized MCP interface.
 
 ---
 
-## What This Lab Demonstrates
-
-| Capability | How it's shown |
-|---|---|
-| MCP tool discovery | Agent loads tools dynamically at runtime from the filesystem server |
-| MCP resource access | Direct resource loading via `load_mcp_resources` |
-| Agent + MCP tools | ReAct agent uses `read_file`, `list_directory`, `search_files` |
-| Document analysis | Agent reads and summarizes `.txt` files |
-| Cross-document synthesis | Agent reads multiple files and connects information across them |
-| Content search | Agent searches for specific terms across all documents |
-
----
-
-## Project Structure
+## File & Folder Map
 
 ```
 LangChain_Integration/
-├── mcp_langchain.py          # Main script — all demos
-├── requirements.txt          # Python dependencies
-├── .env                      # API key (you must fill this in)
-├── README.md                 # This file
-├── lab_summary.md            # MCP vs direct API trade-off analysis + sample output
-└── test_documents/           # Documents served by the MCP filesystem server
-    ├── ai_trends_2025.txt
-    ├── client_proposal.txt
-    └── mcp_technical_overview.txt
+│
+├── mcp_langchain.py          Main script. Runs 5 verification steps:
+│                             connection test → tool loading → agent tool use
+│                             → practical use case → resources demo.
+│
+├── requirements.txt          All Python dependencies (one pip install command).
+│
+├── .env                      Your OpenAI API key goes here. Never committed.
+│
+├── .gitignore                Excludes .env, __pycache__, .DS_Store, etc.
+│
+├── lab_summary.md            One-paragraph trade-off analysis: MCP vs direct API,
+│                             when to use each, and key architectural differences.
+│
+├── README.md                 This file — setup, run instructions, architecture.
+│
+└── test_documents/           Documents sandboxed to the MCP filesystem server.
+    │                         The agent can only read/list files inside here.
+    │
+    ├── ai_trends_2025.txt        2025 AI trends report (agentic AI, RAG, MCP, etc.)
+    ├── client_proposal.txt       RetailCo AI consulting proposal with ROI figures.
+    └── mcp_technical_overview.txt  MCP architecture, concepts, and comparison table.
 ```
 
 ---
 
-## Setup
+## How to Run
 
 ### Prerequisites
 
-- Python 3.11+ (Anaconda base env works)
-- Node.js 18+ (for the MCP filesystem server via `npx`)
-- An OpenAI API key
+| Requirement | Version | Check |
+|---|---|---|
+| Python | 3.11+ | `python --version` |
+| Node.js | 18+ | `node --version` |
+| OpenAI API key | — | [platform.openai.com](https://platform.openai.com) |
 
-### 1. Install Python dependencies
+> **Anaconda users:** use `/opt/anaconda3/bin/python` instead of `python` in the commands below.
+
+---
+
+### Step 1 — Clone the repo
+
+```bash
+git clone https://github.com/Lucas-Barrios/LangChain_integration.git
+cd LangChain_integration
+```
+
+### Step 2 — Install dependencies
 
 ```bash
 pip install langchain langchain-openai langchain-mcp-adapters mcp python-dotenv
 ```
 
-### 2. Set your OpenAI API key
+Or pin the exact versions:
 
-Edit `.env`:
+```bash
+pip install -r requirements.txt
+```
+
+### Step 3 — Add your API key
+
+Open `.env` and replace the placeholder:
+
 ```
 OPENAI_API_KEY=sk-...your-key-here...
 ```
 
-### 3. Run
+### Step 4 — Run
 
 ```bash
-# Using Anaconda Python (recommended):
-/opt/anaconda3/bin/python mcp_langchain.py
-
-# Or if your default python is 3.11+:
 python mcp_langchain.py
 ```
 
-The first run will auto-download `@modelcontextprotocol/server-filesystem` via `npx` (~2 seconds).
+The first run downloads `@modelcontextprotocol/server-filesystem` via `npx` (cached after that).
+
+---
+
+### Expected output
+
+A successful run prints a checkmark for each requirement:
+
+```
+✓  MCP server connected — received 14 tool schemas over stdio
+✓  All tools are langchain_core BaseTool instances — adapter conversion succeeded
+✓  Agent made 2 MCP tool call(s): list_allowed_directories, list_directory
+✓  Practical use case complete — agent read, synthesized, and reported across documents
+✓  Resources API exercised — tool-based access pattern confirmed
+
+VERIFICATION CHECKLIST
+  ✓  MCP server connected via stdio transport
+  ✓  Tools loaded as LangChain BaseTool objects
+  ✓  Agent called MCP tools autonomously (ToolMessages confirmed)
+  ✓  Practical use case: multi-document client briefing produced
+```
 
 ---
 
@@ -78,25 +114,26 @@ The first run will auto-download `@modelcontextprotocol/server-filesystem` via `
 ```
 mcp_langchain.py
        │
-       │  async with MultiServerMCPClient(config)
+       │  client = MultiServerMCPClient(MCP_SERVER_CONFIG)
        │       │
-       │       └── launches subprocess:
+       │       └── spawns subprocess:
        │            npx @modelcontextprotocol/server-filesystem ./test_documents
        │                      │
-       │            MCP stdio transport (JSON-RPC over stdin/stdout)
+       │            stdio transport (JSON-RPC over stdin/stdout)
        │                      │
-       │            Exposes tools: read_file, list_directory,
-       │                           search_files, write_file, ...
+       │            Exposes 14 tools: read_text_file, list_directory,
+       │                              search_files, write_file, ...
        │
        │  tools = await client.get_tools()
-       │       └── converts MCP schemas → LangChain BaseTool objects
+       │       └── converts MCP JSON schemas → LangChain StructuredTool objects
        │
        │  agent = create_react_agent(llm, tools)
-       │       └── LangGraph ReAct agent (think → act → observe loop)
+       │       └── LangGraph ReAct agent (reason → act → observe loop)
        │
        └── agent.ainvoke({"messages": [HumanMessage(...)]})
-              └── LLM decides which tools to call, agent executes them
-                  via MCP server, result fed back to LLM
+              └── LLM selects which MCP tools to call
+                  Agent executes them, feeds results back to LLM
+                  Final answer returned to caller
 ```
 
 ---
@@ -104,42 +141,43 @@ mcp_langchain.py
 ## Key Design Decisions
 
 **Why `MultiServerMCPClient`?**
-It manages multiple server connections with a single async context manager, handles
-subprocess lifecycle, and converts MCP tool schemas to LangChain format automatically.
+Single object manages connections to multiple MCP servers simultaneously. Pass a config
+dict; the library handles subprocess lifecycle and schema-to-BaseTool conversion.
+Use `client.session("server_name")` as an async context manager when you need direct
+session access (e.g., loading resources).
 
 **Why `stdio` transport?**
-The filesystem server runs locally as a subprocess — no HTTP server setup required.
-For remote MCP servers (cloud APIs, databases), use `"transport": "sse"` instead.
+The filesystem server runs locally — no HTTP server or network setup needed.
+For remote servers (cloud APIs, databases), switch to `"transport": "sse"` with a `"url"`.
 
 **Why `gpt-4o-mini`?**
-Cost-effective for lab use. For production document analysis, upgrade to `gpt-4o`
-for better multi-document reasoning. Change `LLM_MODEL` in the script.
+Cost-effective for lab use. Change `LLM_MODEL` at the top of `mcp_langchain.py`
+to `"gpt-4o"` for stronger multi-document reasoning in production.
 
 **Why ReAct agent?**
-`create_react_agent` (from LangGraph) gives transparent step-by-step reasoning —
-ideal for learning because you can see exactly which tools the agent calls and why.
+`create_react_agent` from LangGraph produces a transparent think → act → observe loop.
+You can inspect every tool call in the message trace, which makes it ideal for learning.
 
 ---
 
-## Customizing
+## Customising
 
-**Add more documents:** Drop any `.txt` file into `test_documents/` — the agent
-discovers them dynamically via `list_directory`.
+**Add documents:** Drop any `.txt` file into `test_documents/` — the agent discovers
+it automatically via `list_directory`.
 
-**Connect to a different MCP server:** Add another entry to `MCP_SERVER_CONFIG`:
+**Add a second MCP server:**
 ```python
 MCP_SERVER_CONFIG = {
-    "filesystem": {...},                    # existing
-    "database": {                           # new
+    "filesystem": { ... },           # existing
+    "database": {                    # new — agent gets tools from both
         "command": "npx",
         "args": ["-y", "@modelcontextprotocol/server-sqlite", "mydb.sqlite"],
         "transport": "stdio",
     }
 }
 ```
-The agent now has tools from both servers simultaneously.
 
-**Use a remote MCP server (SSE):**
+**Use a remote MCP server (SSE transport):**
 ```python
 "remote_api": {
     "url": "https://your-mcp-server.com/sse",
@@ -151,9 +189,10 @@ The agent now has tools from both servers simultaneously.
 
 ## Troubleshooting
 
-| Issue | Fix |
+| Error | Fix |
 |---|---|
-| `ModuleNotFoundError: langchain_openai` | Use `/opt/anaconda3/bin/python` instead of system Python |
-| `ValueError: OPENAI_API_KEY not set` | Edit `.env` and add your key |
-| `npx` slow on first run | Normal — it downloads the MCP package once, then caches it |
-| Agent takes many steps | Expected for multi-document queries; ReAct agents are thorough |
+| `ModuleNotFoundError: langchain_openai` | Run with `/opt/anaconda3/bin/python` — system Python 3.9 is too old |
+| `ValueError: OPENAI_API_KEY not set` | Edit `.env` — placeholder value still present |
+| `npx` slow on first run | Normal — package downloads once then is cached by npm |
+| `Access denied - path outside allowed directories` | Pass the full `DOCS_DIR` path in your query, not a relative filename |
+| Agent takes many steps | Expected — ReAct agents reason step-by-step for multi-file queries |
