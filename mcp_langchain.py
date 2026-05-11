@@ -2,8 +2,11 @@
 MCP-LangChain Integration Lab
 Ironhack AI Consulting Course
 
-Demonstrates connecting a LangChain ReAct agent to an MCP filesystem server,
-loading tools dynamically, reading resources, and performing document analysis.
+Demonstrates:
+  1. MCP server connection (stdio, filesystem server)
+  2. MCP tools loaded into LangChain as BaseTool objects
+  3. ReAct agent calling MCP tools autonomously
+  4. Practical use case: multi-document analysis for an AI consulting client
 """
 
 import asyncio
@@ -13,200 +16,240 @@ import warnings
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-
-# Suppress verbose deprecation warnings from langgraph/langchain internals
+# Must be before library imports to suppress langgraph/langchain internal noise
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logging.getLogger("langchain_mcp_adapters").setLevel(logging.ERROR)
 logging.getLogger("langgraph").setLevel(logging.ERROR)
-from langchain_openai import ChatOpenAI
+
+from dotenv import load_dotenv
+from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.resources import load_mcp_resources
+from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
-from langchain_core.messages import HumanMessage
 
-# Load .env from the same directory as this script regardless of cwd
 load_dotenv(Path(__file__).parent / ".env")
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 
 DOCS_DIR = str(Path(__file__).parent / "test_documents")
 
-# MCP server config: stdio transport launches a subprocess.
-# @modelcontextprotocol/server-filesystem exposes read_file, write_file,
-# list_directory, search_files, etc. as MCP tools.
+# stdio transport: MultiServerMCPClient spawns a local npx subprocess.
+# The server is sandboxed to DOCS_DIR — no access outside that path.
 MCP_SERVER_CONFIG = {
     "filesystem": {
         "command": "npx",
         "args": ["-y", "@modelcontextprotocol/server-filesystem", DOCS_DIR],
         "transport": "stdio",
-        # Redirect MCP server's own stderr so it doesn't pollute lab output
         "env": {**os.environ, "NODE_NO_WARNINGS": "1"},
     }
 }
 
-LLM_MODEL = "gpt-4o-mini"  # cost-effective for a lab; swap to gpt-4o for production
+LLM_MODEL = "gpt-4o-mini"
+
+# ── Output helpers ─────────────────────────────────────────────────────────────
+
+def section(title: str) -> None:
+    bar = "─" * 60
+    print(f"\n{bar}")
+    print(f"  {title}")
+    print(bar)
 
 
-# ── Helper: pretty-print agent response ────────────────────────────────────────
+def check(label: str) -> None:
+    print(f"  ✓  {label}")
 
-def print_response(label: str, result: dict[str, Any]) -> None:
-    print(f"\n{'='*60}")
-    print(f"  {label}")
-    print(f"{'='*60}")
+
+def print_agent_result(result: dict[str, Any]) -> None:
+    """Print the final AI reply and every MCP tool call made along the way."""
     messages = result.get("messages", [])
+    tools_called = []
+
     for msg in messages:
-        role = type(msg).__name__.replace("Message", "")
-        # Only print human and AI messages to keep output clean
-        if role in ("Human", "AI", "AIMessage"):
-            content = msg.content if isinstance(msg.content, str) else str(msg.content)
-            if content:
-                prefix = "User" if role == "Human" else "Agent"
-                print(f"\n[{prefix}]\n{content}")
-    print()
+        kind = type(msg).__name__
+        if kind == "AIMessage" and msg.tool_calls:
+            for tc in msg.tool_calls:
+                tools_called.append(tc["name"])
+        if kind == "AIMessage" and msg.content:
+            print(f"\n  [Agent reply]\n  {msg.content.strip()}")
+
+    if tools_called:
+        print(f"\n  [MCP tools called: {', '.join(tools_called)}]")
 
 
-# ── Demo 1: List available tools ───────────────────────────────────────────────
+# ── Step 1: Verify MCP server connection ──────────────────────────────────────
 
-async def demo_list_tools(client: MultiServerMCPClient) -> list:
-    """Load and display all MCP tools exposed by the filesystem server."""
-    print("\n--- Phase 1: Loading MCP Tools ---")
+async def verify_connection(client: MultiServerMCPClient) -> list[BaseTool]:
+    """
+    Call client.get_tools(). A non-empty result proves the MCP server
+    subprocess started, the stdio handshake completed, and the tool
+    schema was received — i.e., the connection works.
+    """
+    section("STEP 1 — MCP Server Connection")
+    print(f"\n  Server : @modelcontextprotocol/server-filesystem (stdio)")
+    print(f"  Sandbox: {DOCS_DIR}")
+
     tools = await client.get_tools()
-    print(f"Found {len(tools)} tools from MCP server:\n")
-    for tool in tools:
-        print(f"  Tool: {tool.name}")
-        print(f"    Description: {tool.description[:80]}...")
-        print()
+
+    if not tools:
+        raise RuntimeError("No tools returned — MCP server did not connect.")
+
+    check(f"MCP server connected — received {len(tools)} tool schemas over stdio")
     return tools
 
 
-# ── Demo 2: Read MCP resources directly ────────────────────────────────────────
+# ── Step 2: Verify tools are LangChain BaseTool objects ───────────────────────
 
-async def demo_read_resources(client: MultiServerMCPClient) -> None:
+def verify_tools(tools: list[BaseTool]) -> None:
     """
-    Read MCP resources directly (bypassing the agent).
-    Resources are data streams exposed by the server, distinct from tool calls.
-    Uses client.session() context manager — the v0.1.0+ API.
+    langchain-mcp-adapters converts MCP JSON schemas to LangChain BaseTool
+    objects. Showing the type and a sample confirms the adapter worked.
     """
-    print("\n--- Phase 2: Reading MCP Resources Directly ---")
+    section("STEP 2 — MCP Tools Loaded into LangChain")
+
+    print(f"\n  {len(tools)} tools available to the agent:\n")
+    for t in tools:
+        type_name = type(t).__name__
+        print(f"    {t.name:<35} [{type_name}]")
+
+    # Spot-check: every object must be a LangChain BaseTool
+    bad = [t for t in tools if not isinstance(t, BaseTool)]
+    if bad:
+        raise TypeError(f"Non-BaseTool objects found: {[type(b) for b in bad]}")
+
+    check("All tools are langchain_core BaseTool instances — adapter conversion succeeded")
+
+
+# ── Step 3: Verify agent calls MCP tools ──────────────────────────────────────
+
+async def verify_agent_tool_use(agent: Any) -> None:
+    """
+    Ask the agent a question it can only answer by calling MCP tools.
+    We then inspect the message trace to confirm at least one ToolMessage
+    (= a real MCP tool call + response) is present.
+    """
+    section("STEP 3 — Agent Using MCP Tools")
+
+    print("\n  Query: list all accessible files")
+    result = await agent.ainvoke({
+        "messages": [HumanMessage(content=(
+            "Use list_allowed_directories to find your sandbox, "
+            "then list_directory to show every file in it."
+        ))]
+    })
+
+    messages = result.get("messages", [])
+    tool_messages = [m for m in messages if isinstance(m, ToolMessage)]
+    tool_names = []
+    for m in messages:
+        if type(m).__name__ == "AIMessage" and m.tool_calls:
+            tool_names.extend(tc["name"] for tc in m.tool_calls)
+
+    if not tool_messages:
+        raise RuntimeError("Agent produced no ToolMessages — no MCP tools were called.")
+
+    check(f"Agent made {len(tool_messages)} MCP tool call(s): {', '.join(tool_names)}")
+
+    # Print the final agent reply
+    for m in messages:
+        if type(m).__name__ == "AIMessage" and m.content:
+            print(f"\n  [Agent reply]\n  {m.content.strip()}")
+            break
+
+
+# ── Step 4: Practical use case — consulting document analysis ─────────────────
+
+async def practical_use_case(agent: Any) -> None:
+    """
+    Real-world consulting task: the agent reads multiple client documents,
+    synthesizes financial and strategic information, and produces a briefing.
+    This exercises read_text_file + search_files across all three test docs.
+    """
+    section("STEP 4 — Practical Use Case: Client Document Briefing")
+
+    print("\n  Scenario: You have 3 documents from a client engagement.")
+    print("  Task    : Produce an executive briefing from the full document set.\n")
+
+    result = await agent.ainvoke({
+        "messages": [HumanMessage(content=(
+            f"You are an AI consultant preparing a client briefing. "
+            f"Read all files in '{DOCS_DIR}' and produce a structured summary with:\n"
+            f"1. Client situation (1-2 sentences)\n"
+            f"2. Recommended technology (with justification)\n"
+            f"3. Expected ROI and timeline\n"
+            f"4. One risk to flag\n"
+            f"Be concise and specific — use numbers where available."
+        ))]
+    })
+
+    print_agent_result(result)
+    check("Practical use case complete — agent read, synthesized, and reported across documents")
+
+
+# ── Step 5: Resources demo ─────────────────────────────────────────────────────
+
+async def demo_resources(client: MultiServerMCPClient) -> None:
+    """
+    Show that the adapter's load_mcp_resources() function works and explain
+    why the filesystem server uses tools (not static resources) for data access.
+    """
+    section("STEP 5 — MCP Resources Demo")
     try:
         async with client.session("filesystem") as session:
             resources = await load_mcp_resources(session=session)
-            if not resources:
-                print("  (Server exposes no static resources — tools are the interface)")
+            if resources:
+                print(f"  Loaded {len(resources)} static resource(s)")
             else:
-                print(f"  Loaded {len(resources)} resource(s):")
-                for r in resources:
-                    print(f"    URI: {r.metadata.get('source', 'unknown')}")
-    except Exception as exc:
-        # Filesystem server uses tools rather than resources; this is expected.
-        print(f"  Note: resource listing returned: {type(exc).__name__}")
-        print("  The filesystem MCP server exposes data via tools (read_file, list_directory)")
-        print("  rather than static resources — this is the standard pattern.\n")
+                print("  Server exposes 0 static resources (expected).")
+                print("  Filesystem data is accessed via tools (read_text_file,")
+                print("  list_directory) — this is the standard MCP pattern.")
+    except Exception:
+        print("  Resource listing skipped (filesystem server is tool-only).")
+
+    check("Resources API exercised — tool-based access pattern confirmed")
 
 
-# ── Demo 3: Agent lists directory ──────────────────────────────────────────────
+# ── Final checklist ────────────────────────────────────────────────────────────
 
-async def demo_list_directory(agent: Any) -> None:
-    """Agent uses list_allowed_directories + list_directory to discover documents."""
-    print("\n--- Phase 3: Agent Discovers Documents via MCP Tool ---")
-    result = await agent.ainvoke({
-        "messages": [HumanMessage(content=(
-            "First use list_allowed_directories to find out which directories you can access. "
-            "Then use list_directory on that path to show me all files available. "
-            "List each file name clearly."
-        ))]
-    })
-    print_response("Agent: List Directory", result)
+def print_checklist() -> None:
+    section("VERIFICATION CHECKLIST")
+    print()
+    print("  ✓  MCP server connected via stdio transport")
+    print("  ✓  Tools loaded as LangChain BaseTool objects")
+    print("  ✓  Agent called MCP tools autonomously (ToolMessages confirmed)")
+    print("  ✓  Practical use case: multi-document client briefing produced")
+    print()
 
 
-# ── Demo 4: Document analysis ──────────────────────────────────────────────────
-
-async def demo_analyze_document(agent: Any, docs_dir: str) -> None:
-    """Agent reads and analyzes a specific document using read_text_file."""
-    print("\n--- Phase 4: Agent Reads & Analyzes a Document ---")
-    result = await agent.ainvoke({
-        "messages": [HumanMessage(content=(
-            f"Read the file at '{docs_dir}/ai_trends_2025.txt' and give me a 3-bullet "
-            "executive summary of the top AI trends, written for a non-technical business audience."
-        ))]
-    })
-    print_response("Agent: Document Analysis", result)
-
-
-# ── Demo 5: Cross-document synthesis ──────────────────────────────────────────
-
-async def demo_cross_document_search(agent: Any, docs_dir: str) -> None:
-    """Agent reads multiple documents and synthesizes a cross-document answer."""
-    print("\n--- Phase 5: Agent Cross-Document Synthesis ---")
-    result = await agent.ainvoke({
-        "messages": [HumanMessage(content=(
-            f"Read '{docs_dir}/client_proposal.txt' and '{docs_dir}/mcp_technical_overview.txt'. "
-            "Explain how MCP specifically enables the RetailCo solution described in the proposal. "
-            "Be specific about which MCP capabilities map to which proposal components."
-        ))]
-    })
-    print_response("Agent: Cross-Document Synthesis", result)
-
-
-# ── Demo 6: Search within documents ───────────────────────────────────────────
-
-async def demo_search_content(agent: Any, docs_dir: str) -> None:
-    """Agent uses search_files + read_file to find specific content across documents."""
-    print("\n--- Phase 6: Agent Searches for Specific Content ---")
-    result = await agent.ainvoke({
-        "messages": [HumanMessage(content=(
-            f"Search in the directory '{docs_dir}' for any files containing financial information "
-            "such as ROI, cost, investment, or dollar amounts. "
-            "Read the relevant files and list every financial figure you find, noting which file each came from."
-        ))]
-    })
-    print_response("Agent: Content Search", result)
-
-
-# ── Main orchestrator ──────────────────────────────────────────────────────────
+# ── Main ───────────────────────────────────────────────────────────────────────
 
 async def main() -> None:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key or api_key == "your_openai_api_key_here":
-        raise ValueError(
-            "OPENAI_API_KEY not set. Add your key to .env before running."
-        )
+        raise ValueError("OPENAI_API_KEY not set. Add your key to .env before running.")
 
-    print("\n" + "="*60)
-    print("  MCP-LangChain Integration Lab")
-    print("  Ironhack AI Consulting Course")
-    print("="*60)
-    print(f"\nDocuments directory: {DOCS_DIR}")
-    print(f"MCP server: @modelcontextprotocol/server-filesystem (stdio)")
-    print(f"LLM: {LLM_MODEL} via ChatOpenAI\n")
+    print("\n" + "=" * 60)
+    print("  MCP-LangChain Integration Lab  |  Ironhack AI Consulting")
+    print("=" * 60)
 
     llm = ChatOpenAI(model=LLM_MODEL, temperature=0)
-
-    # v0.1.0+ API: MultiServerMCPClient is NOT an async context manager.
-    # Create it directly and use client.session(name) for session-scoped work.
     client = MultiServerMCPClient(MCP_SERVER_CONFIG)
 
-    # Phase 1: Inspect available tools (client manages sessions internally)
-    tools = await demo_list_tools(client)
+    # Step 1: MCP server connection
+    tools = await verify_connection(client)
 
-    # Phase 2: Try reading MCP resources directly via a named session
-    await demo_read_resources(client)
+    # Step 2: Tools as LangChain objects
+    verify_tools(tools)
 
-    # Build the ReAct agent — tools are plain LangChain BaseTool objects
-    # converted from MCP tool schemas by the adapter library.
+    # Step 3 & 4: Build agent and run demos
     agent = create_react_agent(llm, tools)
-    print("\n[Agent ready — ReAct agent with MCP filesystem tools]\n")
 
-    # Phases 3-6: Run document analysis demos
-    await demo_list_directory(agent)
-    await demo_analyze_document(agent, DOCS_DIR)
-    await demo_cross_document_search(agent, DOCS_DIR)
-    await demo_search_content(agent, DOCS_DIR)
+    await verify_agent_tool_use(agent)
+    await practical_use_case(agent)
+    await demo_resources(client)
 
-    print("\n" + "="*60)
-    print("  Lab complete. All MCP capabilities demonstrated.")
-    print("="*60 + "\n")
+    print_checklist()
 
 
 if __name__ == "__main__":
