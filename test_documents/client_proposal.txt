@@ -1,0 +1,50 @@
+Client Proposal: AI Transformation for RetailCo
+================================================
+
+Client: RetailCo (mid-size e-commerce, 500 employees)
+Prepared by: Ironhack AI Consulting Team
+Date: Q2 2025
+
+Problem Statement
+-----------------
+RetailCo processes 10,000+ customer support tickets per week manually. Average resolution
+time is 48 hours. Customer satisfaction (CSAT) score sits at 62%, below industry average of 78%.
+
+Proposed Solution
+-----------------
+Phase 1 (Month 1-2): AI-Powered Triage
+  - Deploy LLM-based ticket classifier (category + priority + sentiment)
+  - Expected outcome: 40% reduction in triage time
+
+Phase 2 (Month 3-4): Autonomous Resolution Agent
+  - Build LangChain agent connected to:
+    * Order management API (via MCP tool)
+    * Knowledge base (RAG pipeline)
+    * CRM system (via MCP tool)
+  - Expected outcome: 60% of tickets auto-resolved without human intervention
+
+Phase 3 (Month 5-6): Analytics Dashboard
+  - Real-time monitoring of agent performance
+  - A/B testing framework for prompt improvements
+
+Investment & ROI
+----------------
+Project cost: $85,000
+Annual savings (labor): $240,000
+Break-even: 4.3 months
+3-year ROI: 847%
+
+Technology Stack
+----------------
+- LangChain (agent orchestration)
+- OpenAI GPT-4o (primary LLM)
+- MCP filesystem + API servers (tool integration)
+- Pinecone (vector store for knowledge base)
+- FastAPI (backend API)
+- React (analytics dashboard)
+
+Next Steps
+----------
+1. Sign NDA and SOW by May 30, 2025
+2. Kickoff workshop with IT and Support teams
+3. Data access agreements for CRM and order system

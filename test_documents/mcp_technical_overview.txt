@@ -1,0 +1,73 @@
+Model Context Protocol (MCP) - Technical Overview
+==================================================
+
+What is MCP?
+------------
+The Model Context Protocol is an open standard developed by Anthropic that defines how
+AI models communicate with external tools and data sources. It decouples the AI model
+from any specific tool implementation, enabling plug-and-play tool ecosystems.
+
+Core Concepts
+-------------
+1. MCP Server
+   A lightweight process that exposes:
+   - Tools: callable functions (e.g., read_file, search_web, query_db)
+   - Resources: readable data streams (e.g., file contents, API responses)
+   - Prompts: reusable prompt templates
+
+2. MCP Client
+   The AI agent or host application that connects to one or more MCP servers.
+   Clients discover available tools/resources and call them on behalf of the LLM.
+
+3. Transport Layer
+   MCP supports two transports:
+   - stdio: subprocess communication (local tools)
+   - SSE (Server-Sent Events): HTTP-based (remote tools)
+
+Architecture Flow
+-----------------
+  User Query
+      |
+      v
+  LangChain Agent (MCP Client)
+      |
+      |-- [tool call] --> MCP Filesystem Server --> Returns file content
+      |-- [tool call] --> MCP Database Server  --> Returns query results
+      |-- [tool call] --> MCP Web Server       --> Returns scraped data
+      |
+      v
+  LLM synthesizes result
+      |
+      v
+  Final Response to User
+
+MCP vs Direct API Integration
+------------------------------
+| Aspect          | MCP                          | Direct API              |
+|-----------------|------------------------------|-------------------------|
+| Setup           | Standardized client/server   | Custom per-integration  |
+| Portability     | Swap servers without code    | Tightly coupled         |
+| Discovery       | Dynamic tool discovery       | Hardcoded tool list     |
+| Security        | Server-side sandboxing       | Client-side management  |
+| Ecosystem       | Growing (1000+ servers)      | Mature but fragmented   |
+
+LangChain + MCP Integration
+----------------------------
+The `langchain-mcp-adapters` library bridges LangChain and MCP:
+  - MultiServerMCPClient: manages connections to multiple MCP servers
+  - get_tools(): converts MCP tool schemas to LangChain BaseTool objects
+  - Async-native: all MCP operations use Python asyncio
+
+Example code snippet:
+  async with MultiServerMCPClient(server_config) as client:
+      tools = await client.get_tools()
+      agent = create_react_agent(llm, tools)
+      result = await agent.ainvoke({"messages": [HumanMessage(content=query)]})
+
+Use Cases
+---------
+- Document analysis pipelines
+- Database query agents
+- Web research agents
+- Code execution environments
+- Enterprise data integration hubs

@@ -1,0 +1,34 @@
+AI Trends Report 2025
+=====================
+
+Executive Summary
+-----------------
+Artificial intelligence continues to reshape industries at an unprecedented pace. This report
+highlights the top five trends that AI consultants should be aware of in 2025.
+
+1. Agentic AI Systems
+   AI agents capable of autonomous multi-step reasoning and tool use are becoming mainstream.
+   Frameworks like LangChain and AutoGen enable rapid prototyping of production-grade agents.
+   Key capability: agents can now orchestrate external tools via protocols like MCP (Model Context Protocol).
+
+2. Multimodal Models
+   Leading models (GPT-4o, Claude 3.5, Gemini 1.5) natively process text, images, audio, and video.
+   Enterprise adoption is accelerating in document processing and customer support.
+
+3. RAG (Retrieval-Augmented Generation)
+   RAG pipelines bridge the gap between static model knowledge and real-time data.
+   Vector databases (Pinecone, Chroma, Weaviate) are now standard infrastructure components.
+
+4. Model Context Protocol (MCP)
+   MCP is an open standard introduced by Anthropic that allows AI models to connect to
+   external data sources and tools in a standardized way. Think of it as "USB-C for AI agents."
+   Adoption is growing rapidly across developer tooling ecosystems.
+
+5. Fine-tuning vs. Prompting
+   For most enterprise use cases, advanced prompting (chain-of-thought, few-shot) outperforms
+   expensive fine-tuning. Fine-tuning is reserved for domain-specific terminology and style.
+
+Conclusion
+----------
+AI consultants who master agentic architectures and tool-use frameworks will be best positioned
+for the next wave of enterprise AI transformation.
