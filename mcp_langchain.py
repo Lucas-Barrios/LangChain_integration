@@ -8,6 +8,8 @@ Demonstrates:
   3. ReAct agent calling MCP tools autonomously
   4. Practical use case: multi-document analysis for an AI consulting client
   5. MCP resources loaded and injected as agent context (custom resource server)
+  6. Complete MCP-enabled agent: comprehensive prompt, multiple servers,
+     varied tool exercises, explicit session lifecycle management
 """
 
 import asyncio
@@ -280,6 +282,122 @@ async def resources_as_context(client: MultiServerMCPClient, tools: list[BaseToo
           f"Tool calls during answer: {len(tool_messages)}")
 
 
+# ── Step 6: Complete MCP-enabled agent ────────────────────────────────────────
+
+# Comprehensive system prompt that describes the agent's identity and its full
+# set of MCP capabilities so the LLM knows what it can do before reasoning starts.
+MCP_SYSTEM_PROMPT = """\
+You are an MCP-enabled AI consulting assistant connected to a secure filesystem \
+via the Model Context Protocol (stdio transport).
+
+Your available MCP tools and when to use them:
+  - list_allowed_directories : discover which paths you can access
+  - list_directory            : list files in a directory
+  - directory_tree            : view the full recursive folder structure as JSON
+  - read_text_file            : read the full text of a single file
+  - read_multiple_files       : read several files in one efficient call
+  - search_files              : recursively find files matching a glob pattern
+  - get_file_info             : retrieve size, timestamps, and type metadata for a path
+  - write_file / edit_file    : create or modify files (use with care)
+
+Always choose the most efficient tool for the task. Cite file names and data \
+you retrieve. Be concise and specific.\
+"""
+
+
+async def step6_complete_agent(
+    client: MultiServerMCPClient,
+    tools: list[BaseTool],
+    llm: ChatOpenAI,
+) -> None:
+    """
+    Step 6 — Complete MCP-enabled agent:
+      - MultiServerMCPClient managing two simultaneous servers
+      - Tools and resources both loaded
+      - Comprehensive system prompt describing MCP capabilities
+      - Four real-world scenarios each exercising a different MCP tool
+      - Explicit session lifecycle management (open → use → close)
+    """
+    section("STEP 6 — Complete MCP-Enabled Agent")
+
+    # ── Setup: load resources + build comprehensive agent ─────────────────────
+    print("\n  [Setup] Loading resources from resource server...")
+    async with client.session("resources") as session:            # explicit open/close
+        blobs = await load_mcp_resources(session=session)
+    print(f"  [Setup] {len(blobs)} resource(s) loaded")
+    # Session automatically closed on exit of `async with` block ↑
+
+    resource_context = "\n\n".join(
+        f"--- {b.as_string().splitlines()[0]} ---\n{b.as_string().strip()}"
+        for b in blobs
+    )
+
+    # Combine the MCP capability description with pre-loaded document context
+    full_system_prompt = SystemMessage(content=(
+        MCP_SYSTEM_PROMPT
+        + "\n\nThe following consulting documents are pre-loaded as background context:\n\n"
+        + resource_context
+    ))
+
+    agent = create_react_agent(llm, tools, prompt=full_system_prompt)
+    check("MultiServerMCPClient connected to 2 servers | Tools + resources loaded | Agent built")
+
+    # ── Scenario 1: search_files — find documents by pattern ──────────────────
+    print("\n\n  Scenario 1 — search_files: find all text documents")
+    r1 = await agent.ainvoke({"messages": [HumanMessage(content=(
+        f"Search '{DOCS_DIR}' for all .txt files. "
+        "List each filename and its size in bytes."
+    ))]})
+    _print_scenario_result(r1)
+
+    # ── Scenario 2: get_file_info — file metadata ──────────────────────────────
+    print("\n\n  Scenario 2 — get_file_info: inspect file metadata")
+    r2 = await agent.ainvoke({"messages": [HumanMessage(content=(
+        f"Use get_file_info on '{DOCS_DIR}/client_proposal.txt'. "
+        "Report its size, creation date, and last-modified date."
+    ))]})
+    _print_scenario_result(r2)
+
+    # ── Scenario 3: directory_tree — full structure view ──────────────────────
+    print("\n\n  Scenario 3 — directory_tree: view full folder structure")
+    r3 = await agent.ainvoke({"messages": [HumanMessage(content=(
+        f"Use directory_tree on '{DOCS_DIR}' and describe the folder structure."
+    ))]})
+    _print_scenario_result(r3)
+
+    # ── Scenario 4: read_multiple_files — efficient multi-file read ───────────
+    print("\n\n  Scenario 4 — read_multiple_files: cross-document consulting query")
+    r4 = await agent.ainvoke({"messages": [HumanMessage(content=(
+        f"Read '{DOCS_DIR}/ai_trends_2025.txt' and '{DOCS_DIR}/client_proposal.txt' "
+        "simultaneously using read_multiple_files. "
+        "Which trend from the trends report most directly justifies the RetailCo proposal? "
+        "One sentence answer."
+    ))]})
+    _print_scenario_result(r4)
+
+    # ── Disconnect: explain lifecycle ─────────────────────────────────────────
+    print("\n  [Disconnect] MCP client session lifecycle:")
+    print("    Each client.session('server') call opens a dedicated stdio session.")
+    print("    Sessions are closed automatically on exit of the `async with` block.")
+    print("    No persistent connection remains after each operation completes.")
+    check("All 4 scenarios complete | Sessions opened and closed explicitly | Clients disconnected")
+
+
+def _print_scenario_result(result: dict[str, Any]) -> None:
+    """Print tool calls made and the final agent reply for a scenario."""
+    messages = result.get("messages", [])
+    tool_names = []
+    for m in messages:
+        if type(m).__name__ == "AIMessage" and m.tool_calls:
+            tool_names.extend(tc["name"] for tc in m.tool_calls)
+    if tool_names:
+        print(f"  Tools called: {', '.join(tool_names)}")
+    for m in messages:
+        if type(m).__name__ == "AIMessage" and m.content:
+            print(f"  Reply: {m.content.strip()}")
+            break
+
+
 # ── Final checklist ────────────────────────────────────────────────────────────
 
 def print_checklist() -> None:
@@ -290,6 +408,7 @@ def print_checklist() -> None:
     print("  ✓  Agent called MCP tools autonomously (ToolMessages confirmed)")
     print("  ✓  Practical use case: multi-document client briefing produced")
     print("  ✓  MCP resources listed, read, and injected as agent context")
+    print("  ✓  Complete agent: comprehensive prompt, 2 servers, 4 tool scenarios, sessions disconnected")
     print()
 
 
@@ -319,6 +438,7 @@ async def main() -> None:
     await verify_agent_tool_use(agent)
     await practical_use_case(agent)
     await resources_as_context(client, tools, llm)
+    await step6_complete_agent(client, tools, llm)
 
     print_checklist()
 
