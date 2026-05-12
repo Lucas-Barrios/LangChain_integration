@@ -24,19 +24,19 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 logging.getLogger("langchain_mcp_adapters").setLevel(logging.ERROR)
 logging.getLogger("langgraph").setLevel(logging.ERROR)
 
+from config import DOCS_DIR, LLM_MODEL
 from dotenv import load_dotenv
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.resources import load_mcp_resources
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
+from utils import check, collect_tool_names, print_agent_result, require_openai_key, section
 
 load_dotenv(Path(__file__).parent / ".env")
 
 # ── Configuration ──────────────────────────────────────────────────────────────
-
-DOCS_DIR = str(Path(__file__).parent / "test_documents")
 
 # Two MCP servers running simultaneously over stdio:
 #   filesystem — exposes 14 tools (read, write, search, list…); sandboxed to DOCS_DIR
@@ -46,7 +46,7 @@ MCP_SERVER_CONFIG = {
         "command": "npx",
         "args": ["-y", "@modelcontextprotocol/server-filesystem", DOCS_DIR],
         "transport": "stdio",
-        "env": {**os.environ, "NODE_NO_WARNINGS": "1"},
+        "env": {**os.environ, "NODE_NO_WARNINGS": "1"},  # silence npx deprecation noise on stdout
     },
     "resources": {
         "command": "python",
@@ -54,37 +54,6 @@ MCP_SERVER_CONFIG = {
         "transport": "stdio",
     },
 }
-
-LLM_MODEL = "gpt-4o-mini"
-
-# ── Output helpers ─────────────────────────────────────────────────────────────
-
-def section(title: str) -> None:
-    bar = "─" * 60
-    print(f"\n{bar}")
-    print(f"  {title}")
-    print(bar)
-
-
-def check(label: str) -> None:
-    print(f"  ✓  {label}")
-
-
-def print_agent_result(result: dict[str, Any]) -> None:
-    """Print the final AI reply and every MCP tool call made along the way."""
-    messages = result.get("messages", [])
-    tools_called = []
-
-    for msg in messages:
-        kind = type(msg).__name__
-        if kind == "AIMessage" and msg.tool_calls:
-            for tc in msg.tool_calls:
-                tools_called.append(tc["name"])
-        if kind == "AIMessage" and msg.content:
-            print(f"\n  [Agent reply]\n  {msg.content.strip()}")
-
-    if tools_called:
-        print(f"\n  [MCP tools called: {', '.join(tools_called)}]")
 
 
 # ── Step 1: Verify MCP server connection ──────────────────────────────────────
@@ -150,19 +119,15 @@ async def verify_agent_tool_use(agent: Any) -> None:
 
     messages = result.get("messages", [])
     tool_messages = [m for m in messages if isinstance(m, ToolMessage)]
-    tool_names = []
-    for m in messages:
-        if type(m).__name__ == "AIMessage" and m.tool_calls:
-            tool_names.extend(tc["name"] for tc in m.tool_calls)
+    tool_names = collect_tool_names(messages)
 
     if not tool_messages:
         raise RuntimeError("Agent produced no ToolMessages — no MCP tools were called.")
 
     check(f"Agent made {len(tool_messages)} MCP tool call(s): {', '.join(tool_names)}")
 
-    # Print the final agent reply
     for m in messages:
-        if type(m).__name__ == "AIMessage" and m.content:
+        if isinstance(m, AIMessage) and m.content:
             print(f"\n  [Agent reply]\n  {m.content.strip()}")
             break
 
@@ -198,60 +163,62 @@ async def practical_use_case(agent: Any) -> None:
 
 # ── Step 5: MCP resources loaded and injected as agent context ────────────────
 
-async def resources_as_context(client: MultiServerMCPClient, tools: list[BaseTool], llm: ChatOpenAI) -> None:
-    """
-    Full Step 5 implementation:
-      a) List available MCP resources from the custom resource server
-      b) Read all resource content via load_mcp_resources()
-      c) Inject that content into the agent as a SystemMessage (prompt=)
-      d) Ask a question the agent can answer purely from pre-loaded context
-         — without calling any MCP tools at all
-    """
-    section("STEP 5 — MCP Resources as Agent Context")
-
-    # ── a) List resources ──────────────────────────────────────────────────────
-    print("\n  a) Listing resources from custom MCP resource server...\n")
+async def _fetch_resource_blobs(client: MultiServerMCPClient) -> list:
+    """Open a resources session, load all blobs, and close the session."""
     async with client.session("resources") as session:
         blobs = await load_mcp_resources(session=session)
-
     if not blobs:
         raise RuntimeError("No resources returned from resource server.")
+    return blobs
 
-    print(f"  Found {len(blobs)} resource(s):\n")
-    for b in blobs:
-        lines = b.as_string().strip().splitlines()
-        preview = lines[0][:70] if lines else "(empty)"
-        size = len(b.as_string())
-        print(f"    resource: {preview}...")
-        print(f"             ({size} chars)\n")
 
-    # ── b) Read and format resource content ───────────────────────────────────
-    print("  b) Resource content loaded into Blob objects via load_mcp_resources()")
-
-    context_parts = []
+def _format_numbered_context(blobs: list) -> str:
+    """Format a list of blobs into a numbered document context string."""
+    parts = []
     for i, b in enumerate(blobs, 1):
-        header = f"--- Document {i} ---"
-        context_parts.append(f"{header}\n{b.as_string().strip()}")
+        parts.append(f"--- Document {i} ---\n{b.as_string().strip()}")
+    return "\n\n".join(parts)
 
-    resource_context = "\n\n".join(context_parts)
 
-    # ── c) Inject into agent as SystemMessage ─────────────────────────────────
-    print("\n  c) Injecting resource content as SystemMessage (prompt= parameter)...")
-
+def _build_context_agent(llm: ChatOpenAI, tools: list[BaseTool], resource_context: str) -> Any:
+    """Wrap resource context in a SystemMessage and return a fresh ReAct agent."""
     system_prompt = SystemMessage(content=(
         "You are an AI consulting assistant. "
         "The following documents have been pre-loaded for you as background context. "
         "Use ONLY this context to answer questions — do NOT call any tools.\n\n"
         f"{resource_context}"
     ))
+    return create_react_agent(llm, tools, prompt=system_prompt)
 
-    # A fresh agent instance with the resource context baked into every invocation.
-    # The `prompt` parameter prepends the SystemMessage before the ReAct loop starts.
-    context_agent = create_react_agent(llm, tools, prompt=system_prompt)
 
-    # ── d) Answer from context — zero tool calls expected ─────────────────────
+async def resources_as_context(client: MultiServerMCPClient, tools: list[BaseTool], llm: ChatOpenAI) -> None:
+    """
+    Step 5: list MCP resources, inject their content as agent context,
+    then verify the agent answers a query without calling any tools.
+    """
+    section("STEP 5 — MCP Resources as Agent Context")
+
+    # a) Fetch blobs from the resource server
+    print("\n  a) Listing resources from custom MCP resource server...\n")
+    blobs = await _fetch_resource_blobs(client)
+
+    print(f"  Found {len(blobs)} resource(s):\n")
+    for b in blobs:
+        lines = b.as_string().strip().splitlines()
+        preview = lines[0][:70] if lines else "(empty)"
+        print(f"    resource: {preview}...")
+        print(f"             ({len(b.as_string())} chars)\n")
+
+    # b) Format blobs into a context string
+    print("  b) Resource content loaded into Blob objects via load_mcp_resources()")
+    resource_context = _format_numbered_context(blobs)
+
+    # c) Build a context-only agent
+    print("\n  c) Injecting resource content as SystemMessage (prompt= parameter)...")
+    context_agent = _build_context_agent(llm, tools, resource_context)
+
+    # d) Query the agent — no tool calls expected
     print("\n  d) Querying agent — answer must come from pre-loaded context only...\n")
-
     query = (
         "Based on the documents in your context: "
         "What is the expected 3-year ROI for the RetailCo project, "
@@ -263,13 +230,10 @@ async def resources_as_context(client: MultiServerMCPClient, tools: list[BaseToo
 
     messages = result.get("messages", [])
     tool_messages = [m for m in messages if isinstance(m, ToolMessage)]
-    tool_calls_made = []
-    for m in messages:
-        if type(m).__name__ == "AIMessage" and m.tool_calls:
-            tool_calls_made.extend(tc["name"] for tc in m.tool_calls)
+    tool_calls_made = collect_tool_names(messages)
 
     for m in messages:
-        if type(m).__name__ == "AIMessage" and m.content:
+        if isinstance(m, AIMessage) and m.content:
             print(f"  [Agent reply]\n  {m.content.strip()}\n")
             break
 
@@ -322,15 +286,10 @@ async def step6_complete_agent(
 
     # ── Setup: load resources + build comprehensive agent ─────────────────────
     print("\n  [Setup] Loading resources from resource server...")
-    async with client.session("resources") as session:            # explicit open/close
-        blobs = await load_mcp_resources(session=session)
+    blobs = await _fetch_resource_blobs(client)
     print(f"  [Setup] {len(blobs)} resource(s) loaded")
-    # Session automatically closed on exit of `async with` block ↑
 
-    resource_context = "\n\n".join(
-        f"--- {b.as_string().splitlines()[0]} ---\n{b.as_string().strip()}"
-        for b in blobs
-    )
+    resource_context = _format_numbered_context(blobs)
 
     # Combine the MCP capability description with pre-loaded document context
     full_system_prompt = SystemMessage(content=(
@@ -342,38 +301,36 @@ async def step6_complete_agent(
     agent = create_react_agent(llm, tools, prompt=full_system_prompt)
     check("MultiServerMCPClient connected to 2 servers | Tools + resources loaded | Agent built")
 
-    # ── Scenario 1: search_files — find documents by pattern ──────────────────
-    print("\n\n  Scenario 1 — search_files: find all text documents")
-    r1 = await agent.ainvoke({"messages": [HumanMessage(content=(
-        f"Search '{DOCS_DIR}' for all .txt files. "
-        "List each filename and its size in bytes."
-    ))]})
-    _print_scenario_result(r1)
+    scenarios = [
+        (
+            "Scenario 1 — search_files: find all text documents",
+            f"Search '{DOCS_DIR}' for all .txt files. List each filename and its size in bytes.",
+        ),
+        (
+            "Scenario 2 — get_file_info: inspect file metadata",
+            f"Use get_file_info on '{DOCS_DIR}/client_proposal.txt'. "
+            "Report its size, creation date, and last-modified date.",
+        ),
+        (
+            "Scenario 3 — directory_tree: view full folder structure",
+            f"Use directory_tree on '{DOCS_DIR}' and describe the folder structure.",
+        ),
+        (
+            "Scenario 4 — read_multiple_files: cross-document consulting query",
+            f"Read '{DOCS_DIR}/ai_trends_2025.txt' and '{DOCS_DIR}/client_proposal.txt' "
+            "simultaneously using read_multiple_files. "
+            "Which trend from the trends report most directly justifies the RetailCo proposal? "
+            "One sentence answer.",
+        ),
+    ]
 
-    # ── Scenario 2: get_file_info — file metadata ──────────────────────────────
-    print("\n\n  Scenario 2 — get_file_info: inspect file metadata")
-    r2 = await agent.ainvoke({"messages": [HumanMessage(content=(
-        f"Use get_file_info on '{DOCS_DIR}/client_proposal.txt'. "
-        "Report its size, creation date, and last-modified date."
-    ))]})
-    _print_scenario_result(r2)
-
-    # ── Scenario 3: directory_tree — full structure view ──────────────────────
-    print("\n\n  Scenario 3 — directory_tree: view full folder structure")
-    r3 = await agent.ainvoke({"messages": [HumanMessage(content=(
-        f"Use directory_tree on '{DOCS_DIR}' and describe the folder structure."
-    ))]})
-    _print_scenario_result(r3)
-
-    # ── Scenario 4: read_multiple_files — efficient multi-file read ───────────
-    print("\n\n  Scenario 4 — read_multiple_files: cross-document consulting query")
-    r4 = await agent.ainvoke({"messages": [HumanMessage(content=(
-        f"Read '{DOCS_DIR}/ai_trends_2025.txt' and '{DOCS_DIR}/client_proposal.txt' "
-        "simultaneously using read_multiple_files. "
-        "Which trend from the trends report most directly justifies the RetailCo proposal? "
-        "One sentence answer."
-    ))]})
-    _print_scenario_result(r4)
+    for label, query in scenarios:
+        print(f"\n\n  {label}")
+        try:
+            result = await agent.ainvoke({"messages": [HumanMessage(content=query)]})
+            _print_scenario_result(result)
+        except Exception as exc:
+            raise RuntimeError(f"{label} failed: {exc}") from exc
 
     # ── Disconnect: explain lifecycle ─────────────────────────────────────────
     print("\n  [Disconnect] MCP client session lifecycle:")
@@ -386,14 +343,11 @@ async def step6_complete_agent(
 def _print_scenario_result(result: dict[str, Any]) -> None:
     """Print tool calls made and the final agent reply for a scenario."""
     messages = result.get("messages", [])
-    tool_names = []
-    for m in messages:
-        if type(m).__name__ == "AIMessage" and m.tool_calls:
-            tool_names.extend(tc["name"] for tc in m.tool_calls)
+    tool_names = collect_tool_names(messages)
     if tool_names:
         print(f"  Tools called: {', '.join(tool_names)}")
     for m in messages:
-        if type(m).__name__ == "AIMessage" and m.content:
+        if isinstance(m, AIMessage) and m.content:
             print(f"  Reply: {m.content.strip()}")
             break
 
@@ -401,6 +355,7 @@ def _print_scenario_result(result: dict[str, Any]) -> None:
 # ── Final checklist ────────────────────────────────────────────────────────────
 
 def print_checklist() -> None:
+    """Print the pass/fail verification summary for all six lab steps."""
     section("VERIFICATION CHECKLIST")
     print()
     print("  ✓  MCP server connected via stdio transport")
@@ -415,15 +370,14 @@ def print_checklist() -> None:
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 async def main() -> None:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key or api_key == "your_openai_api_key_here":
-        raise ValueError("OPENAI_API_KEY not set. Add your key to .env before running.")
+    """Entry point: initialise the LLM and MCP client, then run Steps 1–6 in order."""
+    require_openai_key()
 
     print("\n" + "=" * 60)
     print("  MCP-LangChain Integration Lab  |  Ironhack AI Consulting")
     print("=" * 60)
 
-    llm = ChatOpenAI(model=LLM_MODEL, temperature=0)
+    llm = ChatOpenAI(model=LLM_MODEL, temperature=0)  # deterministic output — no variation between runs
     client = MultiServerMCPClient(MCP_SERVER_CONFIG)
 
     # Step 1: MCP server connection

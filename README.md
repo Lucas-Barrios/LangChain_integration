@@ -26,6 +26,20 @@ LangChain_Integration/
 ├── lab_summary.md            One-paragraph trade-off analysis: MCP vs direct API,
 │                             when to use each, and key architectural differences.
 │
+├── step7_comparison.py       Step 7 standalone script. Implements the same
+│                             functionality with direct API calls (6 hand-written
+│                             BaseTool subclasses, pure Python), runs a live
+│                             benchmark of both approaches on 3 identical tasks,
+│                             and prints a side-by-side comparison table covering
+│                             LOC, dependencies, latency, extensibility, and
+│                             cross-framework portability.
+│
+├── step8_document_agent.py   Step 8 practical example. A production-ready
+│                             Document Analysis Agent with a specialised system
+│                             prompt and four real-world use cases: document
+│                             discovery, targeted data extraction, multi-document
+│                             executive summary, and cross-document content search.
+│
 ├── README.md                 This file — setup, run instructions, architecture.
 │
 └── test_documents/           Documents sandboxed to the MCP filesystem server.
@@ -79,13 +93,33 @@ Open `.env` and replace the placeholder:
 OPENAI_API_KEY=sk-...your-key-here...
 ```
 
-### Step 4 — Run
+### Step 4 — Run Steps 1–6
 
 ```bash
 python mcp_langchain.py
 ```
 
 The first run downloads `@modelcontextprotocol/server-filesystem` via `npx` (cached after that).
+
+### Step 5 — Run Step 7 (MCP vs Direct API comparison)
+
+```bash
+python step7_comparison.py
+```
+
+Runs the same three consulting tasks against both a Direct API agent (6 hand-written
+`BaseTool` subclasses, pure Python) and an MCP agent, then prints a live timing table,
+a complexity breakdown, and a decision framework for when to use each approach.
+
+### Step 6 — Run Step 8 (Document Analysis Agent — practical example)
+
+```bash
+python step8_document_agent.py
+```
+
+Demonstrates a production-ready document analysis agent with four real-world use cases:
+document discovery, targeted data extraction, multi-document executive summary, and
+cross-document content search.
 
 ---
 
