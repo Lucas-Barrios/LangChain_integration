@@ -17,15 +17,6 @@ LangChain_Integration/
 │                             connection test → tool loading → agent tool use
 │                             → practical use case → resources demo.
 │
-├── requirements.txt          All Python dependencies (one pip install command).
-│
-├── .env                      Your OpenAI API key goes here. Never committed.
-│
-├── .gitignore                Excludes .env, __pycache__, .DS_Store, etc.
-│
-├── lab_summary.md            One-paragraph trade-off analysis: MCP vs direct API,
-│                             when to use each, and key architectural differences.
-│
 ├── step7_comparison.py       Step 7 standalone script. Implements the same
 │                             functionality with direct API calls (6 hand-written
 │                             BaseTool subclasses, pure Python), runs a live
@@ -39,6 +30,29 @@ LangChain_Integration/
 │                             prompt and four real-world use cases: document
 │                             discovery, targeted data extraction, multi-document
 │                             executive summary, and cross-document content search.
+│
+├── web_app.py                FastAPI web server that exposes the Document Analysis
+│                             Agent as a streaming HTTP API. Each use case streams
+│                             SSE events (status, tool calls, response tokens) so
+│                             the browser receives live output as the agent works.
+│
+├── static/
+│   └── index.html            Self-contained demo UI. Dark-themed single-page app
+│                             with four use-case cards; clicking one streams the
+│                             agent's tool calls and response in real time.
+│
+├── config.py                 Shared constants: DOCS_DIR, LLM_MODEL.
+│
+├── utils.py                  Shared CLI output helpers (section, check, etc.).
+│
+├── requirements.txt          All Python dependencies (one pip install command).
+│
+├── .env                      Your OpenAI API key goes here. Never committed.
+│
+├── .gitignore                Excludes .env, __pycache__, .DS_Store, etc.
+│
+├── lab_summary.md            One-paragraph trade-off analysis: MCP vs direct API,
+│                             when to use each, and key architectural differences.
 │
 ├── README.md                 This file — setup, run instructions, architecture.
 │
@@ -74,12 +88,6 @@ cd LangChain_integration
 ```
 
 ### Step 2 — Install dependencies
-
-```bash
-pip install langchain langchain-openai langchain-mcp-adapters mcp python-dotenv
-```
-
-Or pin the exact versions:
 
 ```bash
 pip install -r requirements.txt
@@ -121,6 +129,18 @@ Demonstrates a production-ready document analysis agent with four real-world use
 document discovery, targeted data extraction, multi-document executive summary, and
 cross-document content search.
 
+### Step 7 — Launch the web demo UI
+
+```bash
+uvicorn web_app:app --port 8000
+```
+
+Then open **http://localhost:8000** in a browser.
+
+The UI presents all four use cases as cards. Clicking **Run Analysis** streams the
+agent's progress live — MCP server connection, tool calls as they fire (with green
+checkmarks on completion), and the final response rendered token by token.
+
 ---
 
 ### Expected output
@@ -139,6 +159,37 @@ VERIFICATION CHECKLIST
   ✓  Tools loaded as LangChain BaseTool objects
   ✓  Agent called MCP tools autonomously (ToolMessages confirmed)
   ✓  Practical use case: multi-document client briefing produced
+```
+
+---
+
+## Web Demo Architecture
+
+```
+Browser
+  │  GET /api/run/{1-4}         (HTTP + text/event-stream)
+  ▼
+FastAPI  web_app.py
+  │  stream_analysis()          (async generator)
+  │    │  yields SSE events:
+  │    │    {"type": "status",     "message": "..."}
+  │    │    {"type": "tool_start", "tool": "search_files"}
+  │    │    {"type": "tool_end",   "tool": "search_files"}
+  │    │    {"type": "token",      "content": "..."}   ← per token
+  │    │    {"type": "done"}
+  │    │
+  │    │  agent.astream_events()     (LangGraph streaming)
+  │    │    on_tool_start / on_tool_end → tool call events
+  │    │    on_chat_model_stream      → response tokens
+  │    │
+  │    └── MultiServerMCPClient → MCP filesystem server (npx subprocess)
+  │
+static/index.html
+  ReadableStream reader parses SSE events, updates DOM in real time:
+    status   → appends a status log line
+    tool_*   → adds / ticks off a tool chip in the toolbar
+    token    → streams into marked.js for live markdown rendering
+    done     → removes cursor, shows "Analysis complete" banner
 ```
 
 ---
@@ -230,3 +281,5 @@ MCP_SERVER_CONFIG = {
 | `npx` slow on first run | Normal — package downloads once then is cached by npm |
 | `Access denied - path outside allowed directories` | Pass the full `DOCS_DIR` path in your query, not a relative filename |
 | Agent takes many steps | Expected — ReAct agents reason step-by-step for multi-file queries |
+| `Address already in use` on port 8000 | Run `pkill -f uvicorn` then retry |
+| Web UI shows no output after clicking Run | Check terminal for Python errors; confirm `OPENAI_API_KEY` is set in `.env` |

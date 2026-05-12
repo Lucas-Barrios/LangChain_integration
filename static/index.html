@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MCP Document Analysis Agent</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #080c18;
+      --surface:   #0f1527;
+      --card:      #131829;
+      --card-h:    #192035;
+      --border:    #21294a;
+      --border-h:  #384060;
+      --text:      #e2e8f8;
+      --muted:     #64718f;
+      --c1: #8b5cf6;
+      --c2: #06b6d4;
+      --c3: #10b981;
+      --c4: #f59e0b;
+      --ok:  #22c55e;
+      --err: #ef4444;
+    }
+
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.6;
+    }
+
+    /* ── HEADER ── */
+    header {
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .header-inner {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 2rem;
+      height: 60px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .logo-mark {
+      width: 32px; height: 32px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, var(--c1), var(--c2));
+      display: flex; align-items: center; justify-content: center;
+      font-size: 15px;
+    }
+    .logo-label { font-size: 0.9rem; font-weight: 600; }
+    .logo-sub   { color: var(--muted); font-weight: 400; }
+    .pill-row { display: flex; gap: 6px; }
+    .pill {
+      font-size: 0.68rem; font-weight: 500;
+      padding: 3px 10px; border-radius: 999px;
+      border: 1px solid; letter-spacing: 0.03em;
+    }
+    .pill-v { color: #a78bfa; border-color: rgba(139,92,246,.35); background: rgba(139,92,246,.08); }
+    .pill-b { color: #67e8f9; border-color: rgba(6,182,212,.35);  background: rgba(6,182,212,.08); }
+    .pill-g { color: #6ee7b7; border-color: rgba(16,185,129,.35); background: rgba(16,185,129,.08); }
+
+    /* ── MAIN ── */
+    main {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 3.5rem 2rem 4rem;
+    }
+
+    /* ── HERO ── */
+    .hero {
+      text-align: center;
+      margin-bottom: 3.5rem;
+    }
+    .hero h1 {
+      font-size: 2.6rem;
+      font-weight: 700;
+      line-height: 1.15;
+      background: linear-gradient(135deg, #e2e8f8 0%, #a78bfa 45%, #67e8f9 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 0.85rem;
+    }
+    .hero p {
+      color: var(--muted);
+      font-size: 1.05rem;
+      max-width: 520px;
+      margin: 0 auto 1.6rem;
+    }
+    .flow-bar {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 6px 16px;
+      font-size: 0.73rem;
+      color: var(--muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .flow-bar b  { color: var(--text); font-weight: 500; }
+    .flow-bar .a { color: var(--c1); }
+
+    /* ── GRID ── */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1.25rem;
+      margin-bottom: 2rem;
+    }
+    @media (max-width: 640px) {
+      .grid { grid-template-columns: 1fr; }
+      .hero h1 { font-size: 1.9rem; }
+      .pill-row { display: none; }
+    }
+
+    /* ── CARD ── */
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1.75rem;
+      cursor: default;
+      transition: border-color .2s, background .2s, transform .2s, box-shadow .2s;
+      position: relative;
+      overflow: hidden;
+    }
+    .card::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      opacity: 0;
+      transition: opacity .25s;
+      pointer-events: none;
+    }
+    .card[data-uc="1"]::after { background: radial-gradient(ellipse at 10% 10%, rgba(139,92,246,.1), transparent 55%); }
+    .card[data-uc="2"]::after { background: radial-gradient(ellipse at 10% 10%, rgba(6,182,212,.1),   transparent 55%); }
+    .card[data-uc="3"]::after { background: radial-gradient(ellipse at 10% 10%, rgba(16,185,129,.1),  transparent 55%); }
+    .card[data-uc="4"]::after { background: radial-gradient(ellipse at 10% 10%, rgba(245,158,11,.1),  transparent 55%); }
+    .card:hover { background: var(--card-h); border-color: var(--border-h); transform: translateY(-2px); }
+    .card:hover::after { opacity: 1; }
+
+    .card.active[data-uc="1"] { border-color: var(--c1); box-shadow: 0 0 0 1px var(--c1), 0 6px 28px rgba(139,92,246,.25); }
+    .card.active[data-uc="2"] { border-color: var(--c2); box-shadow: 0 0 0 1px var(--c2), 0 6px 28px rgba(6,182,212,.25);   }
+    .card.active[data-uc="3"] { border-color: var(--c3); box-shadow: 0 0 0 1px var(--c3), 0 6px 28px rgba(16,185,129,.25);  }
+    .card.active[data-uc="4"] { border-color: var(--c4); box-shadow: 0 0 0 1px var(--c4), 0 6px 28px rgba(245,158,11,.25);  }
+
+    .card-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 1.1rem;
+    }
+    .card-icon {
+      width: 48px; height: 48px;
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px; flex-shrink: 0;
+    }
+    .card[data-uc="1"] .card-icon { background: rgba(139,92,246,.15); border: 1px solid rgba(139,92,246,.3); }
+    .card[data-uc="2"] .card-icon { background: rgba(6,182,212,.15);   border: 1px solid rgba(6,182,212,.3);  }
+    .card[data-uc="3"] .card-icon { background: rgba(16,185,129,.15);  border: 1px solid rgba(16,185,129,.3); }
+    .card[data-uc="4"] .card-icon { background: rgba(245,158,11,.15);  border: 1px solid rgba(245,158,11,.3); }
+    .card-num { font-size: 0.68rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+
+    .card h2 { font-size: 1.1rem; font-weight: 600; margin-bottom: .45rem; }
+    .card p  { font-size: .855rem; color: var(--muted); margin-bottom: 1.2rem; line-height: 1.55; }
+
+    .tag-row { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 1.2rem; }
+    .tag {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: .65rem;
+      padding: 2px 8px;
+      border-radius: 5px;
+      background: rgba(255,255,255,.05);
+      border: 1px solid rgba(255,255,255,.1);
+      color: var(--muted);
+    }
+
+    .run-btn {
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      width: 100%;
+      padding: 10px 16px;
+      border-radius: 8px;
+      border: 1px solid;
+      font-size: .875rem; font-weight: 500;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .card[data-uc="1"] .run-btn { border-color: rgba(139,92,246,.45); color: #a78bfa; background: rgba(139,92,246,.1); }
+    .card[data-uc="2"] .run-btn { border-color: rgba(6,182,212,.45);   color: #67e8f9; background: rgba(6,182,212,.1);  }
+    .card[data-uc="3"] .run-btn { border-color: rgba(16,185,129,.45);  color: #6ee7b7; background: rgba(16,185,129,.1); }
+    .card[data-uc="4"] .run-btn { border-color: rgba(245,158,11,.45);  color: #fcd34d; background: rgba(245,158,11,.1); }
+    .card[data-uc="1"] .run-btn:hover { background: rgba(139,92,246,.22); }
+    .card[data-uc="2"] .run-btn:hover { background: rgba(6,182,212,.22);  }
+    .card[data-uc="3"] .run-btn:hover { background: rgba(16,185,129,.22); }
+    .card[data-uc="4"] .run-btn:hover { background: rgba(245,158,11,.22); }
+    .run-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+    .spin {
+      width: 13px; height: 13px;
+      border: 2px solid currentColor;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      display: none;
+    }
+    .run-btn.loading .spin  { display: block; }
+    .run-btn.loading .arrow { display: none; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── OUTPUT PANEL ── */
+    .out-panel {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+      display: none;
+    }
+    .out-panel.show {
+      display: block;
+      animation: slideIn .3s ease;
+    }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Panel header */
+    .out-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: .9rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,.02);
+    }
+    .out-head-left { display: flex; align-items: center; gap: 10px; }
+    .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--muted);
+      transition: background .3s;
+    }
+    .dot.running { background: var(--c3); animation: blink-dot 1.2s ease infinite; }
+    .dot.done    { background: var(--ok); }
+    .dot.error   { background: var(--err); }
+    @keyframes blink-dot { 0%,100% { opacity:1; } 50% { opacity:.3; } }
+
+    .out-title { font-size: .875rem; font-weight: 600; }
+    .close-btn {
+      background: none; border: none; color: var(--muted);
+      cursor: pointer; font-size: 1rem; line-height: 1;
+      padding: 4px; border-radius: 4px;
+      transition: color .15s;
+    }
+    .close-btn:hover { color: var(--text); }
+
+    /* Status log */
+    .status-log {
+      padding: .6rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex; flex-direction: column; gap: 3px;
+    }
+    .s-line {
+      display: flex; align-items: center; gap: 8px;
+      font-size: .775rem; color: var(--muted);
+      animation: fadeIn .2s ease;
+    }
+    .s-line::before { content: '›'; color: var(--c1); font-size: .9rem; }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+    /* Tool calls */
+    .tools-bar {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+      padding: .65rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      min-height: 46px;
+    }
+    .tools-label {
+      font-size: .68rem; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .08em; margin-right: 2px;
+    }
+    .chip {
+      display: flex; align-items: center; gap: 5px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: .7rem;
+      padding: 3px 10px;
+      border-radius: 6px;
+      background: rgba(139,92,246,.12);
+      border: 1px solid rgba(139,92,246,.3);
+      color: #a78bfa;
+      animation: chipPop .18s ease;
+    }
+    .chip.done {
+      background: rgba(34,197,94,.1);
+      border-color: rgba(34,197,94,.3);
+      color: #86efac;
+    }
+    @keyframes chipPop {
+      from { opacity: 0; transform: scale(.82); }
+      to   { opacity: 1; transform: scale(1);   }
+    }
+
+    /* Main response area */
+    .out-body {
+      padding: 1.75rem;
+      max-height: 540px;
+      overflow-y: auto;
+      font-size: .9rem;
+      line-height: 1.8;
+      color: #c5cee8;
+    }
+    /* Markdown styles inside .out-body */
+    .out-body h1,.out-body h2 { color: var(--text); margin: 1.2rem 0 .5rem; font-size: 1.1rem; }
+    .out-body h3 { color: #9aaac8; margin: 1rem 0 .35rem; font-size: .95rem; }
+    .out-body strong { color: var(--text); }
+    .out-body em { color: #94a3c0; }
+    .out-body ul,.out-body ol { padding-left: 1.5rem; margin-bottom: .75rem; }
+    .out-body li { margin-bottom: .3rem; }
+    .out-body p  { margin-bottom: .75rem; }
+    .out-body code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: .82em;
+      background: rgba(255,255,255,.07);
+      padding: 1px 5px; border-radius: 4px;
+    }
+    .out-body pre { background: rgba(0,0,0,.4); border-radius: 8px; padding: 1rem; overflow-x: auto; margin-bottom: .75rem; }
+    .out-body pre code { background: none; padding: 0; }
+    .out-body blockquote {
+      border-left: 3px solid var(--c1);
+      margin: .75rem 0;
+      padding: .25rem 1rem;
+      color: var(--muted);
+    }
+    .out-body table { width: 100%; border-collapse: collapse; margin-bottom: .75rem; font-size: .85rem; }
+    .out-body th { background: rgba(255,255,255,.06); text-align: left; padding: .5rem .75rem; border-bottom: 1px solid var(--border); }
+    .out-body td { padding: .45rem .75rem; border-bottom: 1px solid rgba(255,255,255,.04); }
+
+    .cursor-blink {
+      display: inline-block;
+      width: 2px; height: 1em;
+      background: var(--c1);
+      margin-left: 1px;
+      vertical-align: text-bottom;
+      animation: cur 1s step-end infinite;
+    }
+    @keyframes cur { 0%,100%{opacity:1;} 50%{opacity:0;} }
+
+    /* Done footer */
+    .done-bar {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: .7rem 1.5rem;
+      border-top: 1px solid var(--border);
+      background: rgba(34,197,94,.04);
+      font-size: .8rem;
+      font-weight: 500;
+      color: var(--ok);
+    }
+
+    /* ── FOOTER ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 1.5rem 2rem;
+      text-align: center;
+      color: var(--muted);
+      font-size: .78rem;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="header-inner">
+    <div class="logo">
+      <div class="logo-mark">🤖</div>
+      <div class="logo-label">MCP Agent Demo <span class="logo-sub">· Ironhack AI Consulting</span></div>
+    </div>
+    <div class="pill-row">
+      <span class="pill pill-v">LangChain</span>
+      <span class="pill pill-b">GPT-4o-mini</span>
+      <span class="pill pill-g">MCP Protocol</span>
+    </div>
+  </div>
+</header>
+
+<main>
+
+  <!-- Hero -->
+  <div class="hero">
+    <h1>Document Analysis Agent</h1>
+    <p>An MCP-powered AI agent that autonomously discovers, reads, and synthesises documents — no manual file access needed.</p>
+    <div class="flow-bar">
+      <b>User Query</b>
+      <span class="a">→</span>
+      <b>LangChain Agent</b>
+      <span class="a">→</span>
+      <b>MCP Server</b>
+      <span class="a">→</span>
+      <b>Filesystem</b>
+      <span class="a">→</span>
+      <b>AI Response</b>
+    </div>
+  </div>
+
+  <!-- Use Case Cards -->
+  <div class="grid">
+
+    <div class="card" data-uc="1">
+      <div class="card-top">
+        <div class="card-icon">🔍</div>
+        <span class="card-num">Use Case 01</span>
+      </div>
+      <h2>Document Discovery</h2>
+      <p>Inventory every file in the sandbox with metadata — name, size, modification date, and an agent-generated one-sentence description of each document.</p>
+      <div class="tag-row">
+        <span class="tag">search_files</span>
+        <span class="tag">get_file_info</span>
+      </div>
+      <button class="run-btn" onclick="runUseCase(1)">
+        <div class="spin"></div>
+        <span class="btn-label">Run Analysis</span>
+        <span class="arrow">→</span>
+      </button>
+    </div>
+
+    <div class="card" data-uc="2">
+      <div class="card-top">
+        <div class="card-icon">📄</div>
+        <span class="card-num">Use Case 02</span>
+      </div>
+      <h2>Targeted Data Extraction</h2>
+      <p>Read the client proposal and pull every piece of structured data — client profile, verbatim financials, project phases, and technology stack.</p>
+      <div class="tag-row">
+        <span class="tag">read_text_file</span>
+      </div>
+      <button class="run-btn" onclick="runUseCase(2)">
+        <div class="spin"></div>
+        <span class="btn-label">Run Analysis</span>
+        <span class="arrow">→</span>
+      </button>
+    </div>
+
+    <div class="card" data-uc="3">
+      <div class="card-top">
+        <div class="card-icon">📊</div>
+        <span class="card-num">Use Case 03</span>
+      </div>
+      <h2>Executive Summary</h2>
+      <p>Synthesise all three consulting documents into a C-suite briefing — Situation, Approach, Value Case, and Top Risk — using a single MCP read call.</p>
+      <div class="tag-row">
+        <span class="tag">read_multiple_files</span>
+      </div>
+      <button class="run-btn" onclick="runUseCase(3)">
+        <div class="spin"></div>
+        <span class="btn-label">Run Analysis</span>
+        <span class="arrow">→</span>
+      </button>
+    </div>
+
+    <div class="card" data-uc="4">
+      <div class="card-top">
+        <div class="card-icon">🔎</div>
+        <span class="card-num">Use Case 04</span>
+      </div>
+      <h2>Cross-Document Search</h2>
+      <p>Find every reference to MCP across all documents and compile a sourced evidence brief to support an architectural recommendation to a sceptical stakeholder.</p>
+      <div class="tag-row">
+        <span class="tag">read_multiple_files</span>
+      </div>
+      <button class="run-btn" onclick="runUseCase(4)">
+        <div class="spin"></div>
+        <span class="btn-label">Run Analysis</span>
+        <span class="arrow">→</span>
+      </button>
+    </div>
+
+  </div>
+
+  <!-- Output Panel -->
+  <div class="out-panel" id="out-panel">
+    <div class="out-head">
+      <div class="out-head-left">
+        <div class="dot" id="dot"></div>
+        <span class="out-title" id="out-title">Analysis Output</span>
+      </div>
+      <button class="close-btn" onclick="closePanel()" title="Close">✕</button>
+    </div>
+    <div class="status-log"  id="status-log"></div>
+    <div class="tools-bar"   id="tools-bar"><span class="tools-label">MCP Tools</span></div>
+    <div class="out-body"    id="out-body"></div>
+    <div class="done-bar"    id="done-bar">✓&nbsp; Analysis complete</div>
+  </div>
+
+</main>
+
+<footer>
+  MCP Document Analysis Agent · Ironhack AI Consulting Course · LangChain + OpenAI + Model Context Protocol
+</footer>
+
+<script>
+  const TITLES = {
+    1: 'Document Discovery',
+    2: 'Targeted Data Extraction',
+    3: 'Executive Summary',
+    4: 'Cross-Document Search',
+  };
+
+  let currentReader = null;
+  let outputText    = '';
+  const chips       = {};    // tool name → chip element
+  let isStreaming   = false;
+
+  // ── Panel helpers ──────────────────────────────────────────────────────────
+
+  function showPanel() {
+    const p = document.getElementById('out-panel');
+    p.classList.add('show');
+    // Smooth scroll to panel
+    setTimeout(() => p.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50);
+  }
+
+  function closePanel() {
+    document.getElementById('out-panel').classList.remove('show');
+    clearActive();
+  }
+
+  function resetPanel(ucId) {
+    document.getElementById('status-log').innerHTML = '';
+    document.getElementById('tools-bar').innerHTML  = '<span class="tools-label">MCP Tools</span>';
+    document.getElementById('out-body').innerHTML   = '';
+    document.getElementById('done-bar').style.display = 'none';
+    document.getElementById('out-title').textContent  = TITLES[ucId] || 'Analysis Output';
+    setDot('running');
+    outputText = '';
+    Object.keys(chips).forEach(k => delete chips[k]);
+  }
+
+  // ── Status dot ────────────────────────────────────────────────────────────
+
+  function setDot(state) {
+    const d = document.getElementById('dot');
+    d.className = 'dot' + (state ? ' ' + state : '');
+  }
+
+  // ── Card active state ─────────────────────────────────────────────────────
+
+  function setActive(ucId) {
+    document.querySelectorAll('.card').forEach(c => c.classList.remove('active'));
+    document.querySelector(`.card[data-uc="${ucId}"]`)?.classList.add('active');
+  }
+
+  function clearActive() {
+    document.querySelectorAll('.card').forEach(c => c.classList.remove('active'));
+  }
+
+  // ── Button state ──────────────────────────────────────────────────────────
+
+  function setBtnLoading(ucId, on) {
+    const btn = document.querySelector(`.card[data-uc="${ucId}"] .run-btn`);
+    if (!btn) return;
+    if (on) {
+      btn.classList.add('loading');
+      btn.disabled = true;
+      btn.querySelector('.btn-label').textContent = 'Running…';
+    } else {
+      btn.classList.remove('loading');
+      btn.disabled = false;
+      btn.querySelector('.btn-label').textContent = 'Run Analysis';
+    }
+  }
+
+  function resetAllBtns() {
+    [1, 2, 3, 4].forEach(id => setBtnLoading(id, false));
+  }
+
+  // ── Event handlers ────────────────────────────────────────────────────────
+
+  function appendStatus(msg) {
+    const log  = document.getElementById('status-log');
+    const line = document.createElement('div');
+    line.className   = 's-line';
+    line.textContent = msg;
+    log.appendChild(line);
+  }
+
+  function addChip(name) {
+    if (chips[name]) return;
+    const bar  = document.getElementById('tools-bar');
+    const chip = document.createElement('div');
+    chip.className   = 'chip';
+    chip.innerHTML   = `<span>⟳</span><span>${name}</span>`;
+    bar.appendChild(chip);
+    chips[name] = chip;
+  }
+
+  function doneChip(name) {
+    const chip = chips[name];
+    if (chip) {
+      chip.classList.add('done');
+      chip.querySelector('span').textContent = '✓';
+    }
+  }
+
+  function appendToken(token) {
+    outputText += token;
+    const el = document.getElementById('out-body');
+    el.innerHTML = marked.parse(outputText) + '<span class="cursor-blink"></span>';
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function finishOutput() {
+    setDot('done');
+    const el = document.getElementById('out-body');
+    el.innerHTML = marked.parse(outputText);   // remove cursor
+    el.scrollTop = el.scrollHeight;
+    document.getElementById('done-bar').style.display = 'flex';
+  }
+
+  function showError(msg) {
+    setDot('error');
+    const el = document.getElementById('out-body');
+    el.innerHTML = `<p style="color:var(--err)"><strong>Error:</strong> ${msg}</p>`;
+  }
+
+  // ── Main runner ───────────────────────────────────────────────────────────
+
+  async function runUseCase(ucId) {
+    if (isStreaming && currentReader) {
+      try { await currentReader.cancel(); } catch {}
+      currentReader = null;
+    }
+
+    isStreaming = true;
+    resetAllBtns();
+    setActive(ucId);
+    setBtnLoading(ucId, true);
+    resetPanel(ucId);
+    showPanel();
+
+    try {
+      const response = await fetch(`/api/run/${ucId}`);
+      if (!response.ok) throw new Error(`Server error: HTTP ${response.status}`);
+
+      const reader  = response.body.getReader();
+      currentReader = reader;
+      const decoder = new TextDecoder();
+      let buffer    = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE messages are separated by double newline
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop();
+
+        for (const part of parts) {
+          for (const line of part.split('\n')) {
+            if (!line.startsWith('data: ')) continue;
+            let evt;
+            try { evt = JSON.parse(line.slice(6)); } catch { continue; }
+
+            switch (evt.type) {
+              case 'status':     appendStatus(evt.message);    break;
+              case 'tool_start': addChip(evt.tool);            break;
+              case 'tool_end':   doneChip(evt.tool);           break;
+              case 'token':      appendToken(evt.content);     break;
+              case 'done':
+                finishOutput();
+                setBtnLoading(ucId, false);
+                isStreaming   = false;
+                currentReader = null;
+                break;
+              case 'error':
+                showError(evt.message);
+                setBtnLoading(ucId, false);
+                isStreaming   = false;
+                currentReader = null;
+                break;
+            }
+          }
+        }
+      }
+    } catch (err) {
+      showError(err.message);
+      setBtnLoading(ucId, false);
+      isStreaming   = false;
+      currentReader = null;
+    }
+  }
+</script>
+</body>
+</html>
